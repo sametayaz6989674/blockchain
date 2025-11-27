@@ -6,7 +6,6 @@ import os
 import io 
 import requests 
 from datetime import datetime
-# Gerekli import: URL'deki özel karakterleri güvenli bir şekilde kodlamak için
 from urllib.parse import quote 
 
 # --- GENEL SABİTLER ---
@@ -67,9 +66,20 @@ def upload_file_to_ipfs(uploaded_file, file_name):
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
+    # --- YENİ EKLENTİ: Pinata'ya klasöre sarmalama yapmamasını söyleyen JSON ---
+    # Bu, dönen CID'nin doğrudan dosyanın kendisine ait olmasını sağlar.
+    pinata_options = json.dumps({
+        "pinataOptions": {
+            "wrapWithDirectory": False # Bu satır KLASÖRE SARMAYI engeller
+        }
+    })
+
     # Dosya içeriğini HTTP isteği için hazırlar
     files = {
-        "file": (file_name, uploaded_file.getvalue(), uploaded_file.type)
+        # 'file' alanı dosyanın ikili verisi
+        "file": (file_name, uploaded_file.getvalue(), uploaded_file.type),
+        # 'pinataOptions' alanı JSON ayarlarımız
+        "pinataOptions": (None, pinata_options, "application/json") 
     }
     
     try:
@@ -109,9 +119,17 @@ def save_chain_to_ipfs(chain):
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
+    # --- YENİ EKLENTİ: Zinciri klasöre sarmalama yapmamasını söyleyen JSON ---
+    pinata_options = json.dumps({
+        "pinataOptions": {
+            "wrapWithDirectory": False # Zincir dosyası da doğrudan CID olarak sabitlenmeli
+        }
+    })
+    
     # Zinciri bir JSON dosyası olarak yükler
     files = {
-        "file": ("blockchain.json", chain_json.encode('utf-8'), "application/json")
+        "file": ("blockchain.json", chain_json.encode('utf-8'), "application/json"),
+        "pinataOptions": (None, pinata_options, "application/json") 
     }
     
     try:
@@ -155,6 +173,7 @@ def load_chain_from_ipfs():
 
         # Pinata Gateway üzerinden JSON dosyasını çek
         gateway_url = f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}"
+        # Zincir okuma sırasında Content-Disposition kullanmaya gerek yok.
         response = requests.get(gateway_url, timeout=10) 
         response.raise_for_status()
         
@@ -308,6 +327,7 @@ with st.container(border=True):
         if col_add.button("Blok Zincirine Ekle ve IPFS'e Kaydet", use_container_width=True):
             
             # --- ADIM 1: DOSYAYI IPFS'E YÜKLE ---
+            # Pinata'nın klasöre sarmalama yapmaması için ayarlama yapıldı.
             with st.spinner(f"Dosya '{uploaded_file.name}' IPFS'e yükleniyor..."):
                 file_cid = upload_file_to_ipfs(uploaded_file, uploaded_file.name)
             
@@ -419,21 +439,21 @@ for block in reversed(blockchain.chain):
                 
                 # Pinata Butonu
                 st.link_button(
-                    f"💾 Pinata Üzerinden Dosyayı İndir ({file_name})", 
+                    f"💾 Pinata Üzerinden Dosyayı İndir (Önerilen)", 
                     pinata_download_url,
                     use_container_width=True,
                     help="Bu Pinata'nın Ağ Geçidi üzerinden dosyanızı indirir."
                 )
 
                 st.markdown("---")
-                st.caption("Pinata linki çalışmazsa (gecikme veya ağ sorunu):")
+                st.caption("Pinata linki çalışmazsa (ağ sorunu):")
                 
                 # Cloudflare Butonu (Fallback)
                 st.link_button(
                     f"☁️ Alternatif İndirme (Cloudflare)", 
                     cloudflare_download_url,
                     use_container_width=True,
-                    help="Cloudflare IPFS Ağ Geçidi üzerinden dosyanızı indirir. Ağ geçidi sorunlarına karşı bir çözümdür."
+                    help="Cloudflare IPFS Ağ Geçidi üzerinden dosyanızı indirir."
                 )
                 
             elif block.index > 0:
