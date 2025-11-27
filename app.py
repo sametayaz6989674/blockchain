@@ -199,12 +199,16 @@ def load_chain_from_ipfs():
         st.warning(f"⚠️ Yükleme hatası ({e}). Yeni zincir başlatılıyor.")
         return None
 
-# --- GÜNCELLENMİŞ FONKSİYON: IPFS'TEN DOSYAYI DOĞRUDAN ÇEKME (STREAMLIT İÇİN) ---
+# --- YENİ FONKSİYON: IPFS'TEN DOSYAYI DOĞRUDAN ÇEKME (STREAMLIT İÇİN) ---
 
-def download_file_from_ipfs(file_cid):
+@st.cache_data(ttl=3600) # CID değişmediği sürece 1 saat boyunca önbellekte tut.
+def download_file_from_ipfs(file_cid, block_index):
     """
     Belirtilen CID'ye ait dosyanın ikili içeriğini Pinata Ağ Geçidi'nden 
-    doğrudan çekerek Streamlit'e indirme için hazırlar. Hata yönetimini güçlendirdik.
+    doğrudan çekerek Streamlit'e indirme için hazırlar.
+    
+    Cache'in doğru çalışması için block_index parametresi eklendi,
+    böylece farklı bloklar için farklı CID'ler önbellekte tutulabilir.
     """
     PINATA_JWT = get_pinata_jwt()
     if not PINATA_JWT:
@@ -212,22 +216,25 @@ def download_file_from_ipfs(file_cid):
 
     gateway_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}"
     
+    st.info(f"🔍 Blok #{block_index} için dosya içeriği Pinata'dan çekiliyor... (CID: {file_cid[:10]}...)")
+    
     try:
         # Zaman aşımını 60 saniyeye çıkardık.
         response = requests.get(gateway_url, timeout=60)
         response.raise_for_status() 
         
+        st.success(f"✅ Blok #{block_index} Dosya içeriği başarıyla çekildi.")
         # İkili dosya içeriğini döndür
         return response.content
     
     except requests.exceptions.HTTPError as err:
-        st.error(f"❌ Dosya İndirme Hatası (HTTP): Pinata Ağ Geçidi'nden Dosya Çekilemedi. CID: `{file_cid[:10]}...`. Lütfen Pinata kontrol panelinizden dosyanın sabitlenmiş (pinned) olduğunu doğrulayın. Detay: {err}")
+        st.error(f"❌ İndirme Hatası (HTTP): Dosya Pinata Ağ Geçidi'nden Çekilemedi. Detay: {err}")
         return None
     except requests.exceptions.Timeout:
-        st.error(f"❌ Dosya İndirme Hatası (Zaman Aşımı): Pinata'ya erişim 60 saniyede zaman aşımına uğradı. Dosya büyük veya ağ sorunu olabilir. CID: `{file_cid[:10]}...`")
+        st.error(f"❌ İndirme Hatası (Zaman Aşımı): Pinata'ya erişim 60 saniyede zaman aşımına uğradı. Dosya çok büyük veya ağ sorunu olabilir.")
         return None
     except Exception as e:
-        st.error(f"❌ Dosya İndirme sırasında beklenmeyen bir hata oluştu: {e}")
+        st.error(f"❌ İndirme sırasında beklenmeyen bir hata oluştu: {e}")
         return None
 
 # --- BLOCKCHAIN SINIFI ---
@@ -269,6 +276,10 @@ class Blockchain:
         
         # IPFS Kalıcılık Adımı: Zinciri kaydet
         new_cid = save_chain_to_ipfs(self.chain) 
+        
+        # Eğer yeni blok eklendiyse, önbelleği temizlemeyi teklif et.
+        # Bu, yeni eklenen dosyaların hemen indirilebilir olmasını sağlar.
+        download_file_from_ipfs.clear()
         
         return block
 
@@ -460,9 +471,9 @@ for block in reversed(blockchain.chain):
 
                 # --- 1. Doğrudan API/Streamlit İndirme Yöntemi (En Güvenilir) ---
                 
-                # Dosya içeriğini indirme için bir kere çekiyoruz
-                # NOT: Bu çağrı, Streamlit sunucusu tarafından yapıldığı için ağ geçidi hatalarını en aza indirir.
-                file_content = download_file_from_ipfs(file_cid)
+                # Dosya içeriğini indirme için önbelleklenmiş fonksiyonu çağırıyoruz.
+                # Bu, Streamlit'in kendi sunucusundan Pinata'ya erişim denemesi ve önbelleğe alma sağlar.
+                file_content = download_file_from_ipfs(file_cid, block.index)
                 
                 if file_content:
                     st.download_button(
@@ -471,14 +482,14 @@ for block in reversed(blockchain.chain):
                         file_name=file_name,
                         mime="application/octet-stream",
                         use_container_width=True,
-                        help="Streamlit sunucusu dosya içeriğini Pinata'dan çeker ve size bir akış olarak sunar. Bu en güvenilir indirme yoludur."
+                        help="Streamlit sunucusu dosya içeriğini Pinata'dan çeker ve size bir akış olarak sunar. Bu, önbelleğe alınmış ve en güvenilir indirme yoludur."
                     )
                 else:
                     # Hata mesajı artık download_file_from_ipfs fonksiyonu içinde gösteriliyor.
                     st.warning("İndirme butonu, yukarıdaki hatalar nedeniyle oluşturulamadı.")
                 
                 st.markdown("---")
-                st.caption("Geleneksel Ağ Geçidi Linkleri (Yedekler):")
+                st.caption("Geleneksel Ağ Geçidi Linkleri (Yedekler - Tarayıcı Tabanlı İndirme):")
                 
                 # URL kodlama ile dosya adındaki boşluk veya özel karakterler sorun yaratmaz.
                 encoded_file_name = quote(file_name)
