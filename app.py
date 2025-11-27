@@ -34,6 +34,8 @@ class Block:
             "previous_hash": self.previous_hash,
             "nonce": self.nonce
         }
+        # Not: Eğer 'data' None ise, json.dumps hata vermez, ancak bu yapıda 'data' her zaman olmalıdır.
+        # Yine de JSON'a dönüştürmeden önce kontrol eklemek güvenliği artırır.
         block_string = json.dumps(block_data, sort_keys=True).encode('utf-8')
         return hashlib.sha256(block_string).hexdigest()
 
@@ -149,7 +151,10 @@ def load_chain_from_ipfs():
         
         restored_chain = []
         for block_data in raw_chain:
-            block = Block(block_data['index'], block_data['previous_hash'], block_data['data'])
+            # Geri yükleme sırasında data'nın None gelme ihtimaline karşı kontrol
+            data_content = block_data.get('data', None)
+            
+            block = Block(block_data['index'], block_data['previous_hash'], data_content)
             block.timestamp = block_data['timestamp']
             block.hash = block_data['hash']
             block.nonce = block_data['nonce']
@@ -334,7 +339,7 @@ else:
 # Blokları tersten göster (en yeni en üstte)
 for block in reversed(blockchain.chain):
     header_text = f"Blok #{block.index}"
-    if block.index > 0:
+    if block.index > 0 and block.data: # Güvenlik için 'block.data' kontrolü eklendi
         header_text += f" - Dosya: {block.data.get('file_name', 'Bilinmiyor')}"
         
     is_latest = block.index == len(blockchain.chain) - 1 and len(blockchain.chain) > 1
@@ -344,8 +349,12 @@ for block in reversed(blockchain.chain):
         # CID ve diğer bilgileri yan yana göstermek için kolonlar
         col1, col2 = st.columns(2)
         
-        file_cid = block.data.get('file_cid')
-        
+        # block.data'nın sözlük olup olmadığını kontrol et
+        if isinstance(block.data, dict):
+            file_cid = block.data.get('file_cid')
+        else:
+            file_cid = None
+            
         with col1:
             st.subheader("Blok Bilgileri")
             st.markdown(f"**Index:** `{block.index}`")
@@ -353,13 +362,16 @@ for block in reversed(blockchain.chain):
             st.markdown(f"**Nonce:** `{block.nonce}`")
             st.markdown(f"**Önceki Hash:** `{block.previous_hash}`")
             
-            if block.data and block.index > 0:
+            # Ek meta verilerini göstermeden önce 'block.data'nın sözlük olduğunu tekrar kontrol et
+            if isinstance(block.data, dict) and block.index > 0:
                  st.markdown("---")
                  st.subheader("Ek Meta Verileri")
                  st.json({
                      "Dosya Hash": block.data.get('file_hash'),
                      "Ek Not": block.data.get('note')
                  })
+            elif block.data is None:
+                 st.error("⚠️ Blok Verisi (Payload) Eksik veya Geçersiz (None).") # Hata durumunda uyarı
         
         with col2:
             st.subheader("Bloğun Hash ve Dosya Adresi")
@@ -379,3 +391,5 @@ for block in reversed(blockchain.chain):
                 )
             elif block.index == 0:
                 st.markdown("Bu, zincirin başlangıç bloğudur (Genesis). Dosya içeriği yoktur.")
+            else:
+                st.warning("Dosya CID bilgisi bulunamadı.") # Veri eksikse burası tetiklenir
