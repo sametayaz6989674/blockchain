@@ -6,6 +6,8 @@ import os
 import io 
 import requests 
 from datetime import datetime
+# Gerekli import: URL'deki özel karakterleri güvenli bir şekilde kodlamak için
+from urllib.parse import quote 
 
 # --- GENEL SABİTLER ---
 # Streamlit Cloud'da zincirin son CID'sini (Content Identifier) tutacak geçici dosya.
@@ -13,9 +15,8 @@ CID_FILE = "last_chain_cid.txt"
 # Pinata API yükleme adresi.
 PINATA_GATEWAY_UPLOAD = "https://api.pinata.cloud/"
 # Zincir okuma ve dosya indirme için kullanılacak Pinata Ağ Geçidi.
-# NOT: Bu adres, tarayıcıda doğrudan erişim ve indirme için en güvenilir olandır.
 PINATA_GATEWAY_DOWNLOAD = PINATA_GATEWAY_UPLOAD.replace("api.", "gateway.") + "ipfs/" 
-# Cloudflare Ağ Geçidi (Erişim sorunu olduğu için indirme linkinde kullanılmıyor).
+# Alternatif İndirme Ağ Geçidi (Fallback)
 CLOUDFLARE_GATEWAY = "https://cloudflare-ipfs.com/ipfs/" 
 
 # --- SINIF TANIMLARI ---
@@ -407,19 +408,33 @@ for block in reversed(blockchain.chain):
                 st.markdown("---")
                 st.markdown(f"**Dosya IPFS CID (Ağ Adresi):** `{file_cid}`")
                 
-                # --- NİHAİ ÇÖZÜM: Content-Disposition parametresi ile indirme zorlanır ---
-                # CID'ye ek olarak ?content-disposition=attachment ile tarayıcıya indirme emri verilir.
                 # URL kodlama ile dosya adındaki boşluk veya özel karakterler sorun yaratmaz.
-                from urllib.parse import quote
                 encoded_file_name = quote(file_name)
                 
-                download_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}?content-disposition=attachment;filename={encoded_file_name}"
+                # 1. Birincil İndirme Linki (Pinata)
+                pinata_download_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}?content-disposition=attachment;filename={encoded_file_name}"
                 
+                # 2. İkincil İndirme Linki (Cloudflare Fallback)
+                cloudflare_download_url = f"{CLOUDFLARE_GATEWAY}{file_cid}?content-disposition=attachment;filename={encoded_file_name}"
+                
+                # Pinata Butonu
                 st.link_button(
-                    f"💾 Orijinal Dosyayı İndir ({file_name})", 
-                    download_url,
+                    f"💾 Pinata Üzerinden Dosyayı İndir ({file_name})", 
+                    pinata_download_url,
                     use_container_width=True,
-                    help="Bu düğme, Pinata'nın Ağ Geçidi üzerinden dosyayı doğrudan indirmeye zorlar."
+                    help="Bu Pinata'nın Ağ Geçidi üzerinden dosyanızı indirir."
                 )
+
+                st.markdown("---")
+                st.caption("Pinata linki çalışmazsa (gecikme veya ağ sorunu):")
+                
+                # Cloudflare Butonu (Fallback)
+                st.link_button(
+                    f"☁️ Alternatif İndirme (Cloudflare)", 
+                    cloudflare_download_url,
+                    use_container_width=True,
+                    help="Cloudflare IPFS Ağ Geçidi üzerinden dosyanızı indirir. Ağ geçidi sorunlarına karşı bir çözümdür."
+                )
+                
             elif block.index > 0:
                 st.warning("Bu blokta dosya CID bilgisi bulunamadı veya Genesis Blok değil.")
