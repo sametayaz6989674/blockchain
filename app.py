@@ -110,27 +110,25 @@ def save_chain_to_ipfs(chain):
 
 # --- YENİ MODEL: YEDEKLİ AĞ GEÇİDİ İNDİRİCİSİ ---
 
-# Cache kullanmıyoruz veya kısa tutuyoruz çünkü ağ durumları değişebilir.
-# Hata durumunda cache'lemeyi önlemek için show_spinner=False kullanıyoruz.
 def fetch_file_with_redundancy(file_cid):
     """
     Dosyayı indirmek için sırasıyla farklı IPFS ağ geçitlerini dener.
     İlk başarılı olanın içeriğini döndürür.
     """
     
-    st.write(f"🔄 Dosya aranıyor... (CID: `{file_cid[:10]}...`)")
+    status_text = st.empty() # Durum mesajlarını güncellemek için
+    status_text.info(f"🔄 Dosya aranıyor... (CID: `{file_cid[:10]}...`)")
     
-    logs = [] # Hata loglarını tutmak için
+    logs = [] 
     
     for gateway in IPFS_GATEWAYS:
         target_url = f"{gateway}{file_cid}"
         try:
-            # 10 saniye zaman aşımı ile dene
-            response = requests.get(target_url, timeout=10)
+            # 15 saniye zaman aşımı ile dene
+            response = requests.get(target_url, timeout=15)
             
             if response.status_code == 200:
-                # Başarılı!
-                st.success(f"✅ Dosya `{gateway}` üzerinden başarıyla çekildi!")
+                status_text.success(f"✅ Dosya `{gateway}` üzerinden başarıyla çekildi!")
                 return response.content
             else:
                 logs.append(f"❌ {gateway}: HTTP {response.status_code}")
@@ -138,14 +136,13 @@ def fetch_file_with_redundancy(file_cid):
         except requests.exceptions.Timeout:
             logs.append(f"⏳ {gateway}: Zaman aşımı")
         except Exception as e:
-            logs.append(f"⚠️ {gateway}: Hata ({str(e)[:50]}...)")
+            logs.append(f"⚠️ {gateway}: Hata")
             
-    # Eğer buraya geldiyse hiçbir ağ geçidi çalışmamıştır
-    with st.expander("Detaylı Hata Raporu (Tüm Ağ Geçitleri Başarısız)"):
-        for log in logs:
-            st.write(log)
+    # Başarısız olursa detayları göster
+    status_text.error("Dosya hiçbir ağ geçidinden çekilemedi.")
+    with st.expander("Hata Detayları"):
+        for log in logs: st.write(log)
     
-    st.error("Üzgünüz, dosya şu anda hiçbir genel IPFS ağ geçidinden çekilemiyor. Dosya henüz ağa yayılmamış olabilir.")
     return None
 
 def load_chain_from_ipfs():
@@ -156,8 +153,6 @@ def load_chain_from_ipfs():
             last_cid = f.read().strip()
         if not last_cid: return None
 
-        # Yedekli indiriciyi kullan (ama UI mesajlarını gizle)
-        # Basit bir requests döngüsü:
         raw_data = None
         for gateway in IPFS_GATEWAYS:
             try:
@@ -287,21 +282,32 @@ for block in reversed(blockchain.chain):
                 fname = block.data.get('file_name', 'dosya')
                 st.info(f"📂 Dosya CID: `{cid}`")
                 
-                # --- YENİ İNDİRME MODELİ ---
-                # Butona basılınca 'fetch_file_with_redundancy' çalışır.
-                # Key parametresi her blok için benzersiz olmalı.
+                # --- YENİ İNDİRME MODELİ (DÜZELTİLMİŞ) ---
+                # Dosya içeriğini session_state'de saklayarak butonun kaybolmasını önlüyoruz.
+                
+                download_key = f"file_content_{block.index}"
+                
+                # 1. Aşama: Dosyayı IPFS'ten Çek
                 if st.button(f"⬇️ İndirmeyi Başlat ({fname})", key=f"btn_{block.index}"):
                     file_content = fetch_file_with_redundancy(cid)
-                    
                     if file_content:
-                        # İçerik başarıyla çekildiyse indirme butonunu göster
-                        # (Streamlit kısıtlaması: Otomatik indirme başlatılamaz, kullanıcı ikinci kez basmalı)
-                        st.download_button(
-                            label=f"✅ Hazır! Buraya Tıkla ve İndir",
-                            data=file_content,
-                            file_name=fname,
-                            mime="application/octet-stream",
-                            key=f"dl_{block.index}"
-                        )
+                        # Veriyi oturuma kaydet
+                        st.session_state[download_key] = file_content
+                    else:
+                        # Hata durumunda eski veriyi temizle
+                        if download_key in st.session_state:
+                            del st.session_state[download_key]
+
+                # 2. Aşama: İndirme Butonunu Göster (Eğer veri hafızadaysa)
+                if download_key in st.session_state:
+                    st.success("✅ Dosya hazır!")
+                    st.download_button(
+                        label=f"💾 Dosyayı Kaydet: {fname}",
+                        data=st.session_state[download_key],
+                        file_name=fname,
+                        mime="application/octet-stream",
+                        key=f"dl_{block.index}"
+                    )
+                    
             elif block.index == 0:
                 st.write("Genesis Blok")
