@@ -14,8 +14,8 @@ CID_FILE = "last_chain_cid.txt"
 PINATA_GATEWAY_UPLOAD = "https://api.pinata.cloud/"
 # Zincir okuma için kullanılacak Pinata Ağ Geçidi
 PINATA_GATEWAY_DOWNLOAD = PINATA_GATEWAY_UPLOAD.replace("api.", "gateway.") + "ipfs/" 
-# Cloudflare Ağ Geçidi (Alternatif indirme denemesi için tutuldu, ancak artık kullanılmıyor)
-# CLOUDFLARE_GATEWAY = "https://cloudflare-ipfs.com/ipfs/" 
+# İndirme linki için kullanılacak Cloudflare Ağ Geçidi (En stabil olanıdır)
+CLOUDFLARE_GATEWAY = "https://cloudflare-ipfs.com/ipfs/" 
 
 # --- SINIF TANIMLARI ---
 
@@ -39,7 +39,6 @@ class Block:
             "nonce": self.nonce
         }
         # Not: Eğer 'data' None ise, json.dumps hata vermez, ancak bu yapıda 'data' her zaman olmalıdır.
-        # Yine de JSON'a dönüştürmeden önce kontrol eklemek güvenliği artırır.
         block_string = json.dumps(block_data, sort_keys=True).encode('utf-8')
         return hashlib.sha256(block_string).hexdigest()
 
@@ -65,7 +64,6 @@ def upload_file_to_ipfs(uploaded_file, file_name):
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
-    # Dosya içeriğini bellekte tut (Streamlit file_uploader objesinden)
     files = {
         "file": (file_name, uploaded_file.getvalue(), uploaded_file.type)
     }
@@ -81,7 +79,6 @@ def upload_file_to_ipfs(uploaded_file, file_name):
             st.error(f"❌ Pinata dosya CID'si döndürmedi: {res_data.get('error', 'Bilinmeyen Hata')}")
             return None
         
-        # st.success(f"✅ Dosya IPFS'e kaydedildi. CID: {file_cid[:10]}...")
         return file_cid
         
     except requests.exceptions.HTTPError as err:
@@ -147,7 +144,7 @@ def load_chain_from_ipfs():
         if not last_cid:
             return None
 
-        # Zincir okuma için Pinata Gateway
+        # Zincir okuma için Pinata Gateway kullanılıyor
         gateway_url = f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}"
         response = requests.get(gateway_url, timeout=10) 
         response.raise_for_status()
@@ -156,7 +153,6 @@ def load_chain_from_ipfs():
         
         restored_chain = []
         for block_data in raw_chain:
-            # Geri yükleme sırasında data'nın None gelme ihtimaline karşı kontrol
             data_content = block_data.get('data', None)
             
             block = Block(block_data['index'], block_data['previous_hash'], data_content)
@@ -172,30 +168,8 @@ def load_chain_from_ipfs():
         st.warning(f"⚠️ Yükleme hatası. Yeni zincir başlatılıyor. Hata: {e}")
         return None
 
-# --- YENİ FONKSİYON: IPFS'TEN DOSYAYI ÇEKME ---
-
-def fetch_file_from_ipfs(file_cid):
-    """Verilen CID'ye ait dosya içeriğini IPFS'ten çeker."""
-    try:
-        # Cloudflare'ı doğrudan kullanmak indirme için daha stabil olabilir
-        CLOUDFLARE_GATEWAY = "https://cloudflare-ipfs.com/ipfs/"
-        gateway_url = f"{CLOUDFLARE_GATEWAY}{file_cid}"
-        
-        response = requests.get(gateway_url, stream=True, timeout=30)
-        response.raise_for_status()
-        
-        # Dosya içeriğini byte olarak döndür
-        return response.content
-
-    except requests.exceptions.RequestException as e:
-        st.error(f"❌ IPFS Dosya Çekme Hatası: {e}. CID'nin geçerli ve erişilebilir olduğundan emin olun.")
-        return None
-    except Exception as e:
-        st.error(f"❌ Beklenmedik Dosya Çekme Hatası: {e}")
-        return None
 
 # --- BLOCKCHAIN SINIFI ---
-# (Burada değişiklik yapılmadı, önceki kodla aynı)
 
 class Blockchain:
     """Tüm blok zincirini yönetir."""
@@ -367,7 +341,7 @@ else:
 # Blokları tersten göster (en yeni en üstte)
 for block in reversed(blockchain.chain):
     header_text = f"Blok #{block.index}"
-    if block.index > 0 and block.data: # Güvenlik için 'block.data' kontrolü eklendi
+    if block.index > 0 and block.data:
         header_text += f" - Dosya: {block.data.get('file_name', 'Bilinmiyor')}"
         
     is_latest = block.index == len(blockchain.chain) - 1 and len(blockchain.chain) > 1
@@ -377,7 +351,7 @@ for block in reversed(blockchain.chain):
         # CID ve diğer bilgileri yan yana göstermek için kolonlar
         col1, col2 = st.columns(2)
         
-        # block.data'nın sözlük olup olmadığını kontrol et
+        # block.data'dan bilgileri güvenli bir şekilde çekme
         if isinstance(block.data, dict):
             file_cid = block.data.get('file_cid')
             file_name = block.data.get('file_name', 'indirilen_dosya')
@@ -392,7 +366,6 @@ for block in reversed(blockchain.chain):
             st.markdown(f"**Nonce:** `{block.nonce}`")
             st.markdown(f"**Önceki Hash:** `{block.previous_hash}`")
             
-            # Ek meta verilerini göstermeden önce 'block.data'nın sözlük olduğunu tekrar kontrol et
             if isinstance(block.data, dict) and block.index > 0:
                  st.markdown("---")
                  st.subheader("Ek Meta Verileri")
@@ -401,7 +374,7 @@ for block in reversed(blockchain.chain):
                      "Ek Not": block.data.get('note')
                  })
             elif block.data is None:
-                 st.error("⚠️ Blok Verisi (Payload) Eksik veya Geçersiz (None).") # Hata durumunda uyarı
+                 st.error("⚠️ Blok Verisi (Payload) Eksik veya Geçersiz (None).")
         
         with col2:
             st.subheader("Bloğun Hash ve Dosya Adresi")
@@ -412,26 +385,17 @@ for block in reversed(blockchain.chain):
                 st.markdown("---")
                 st.markdown(f"**Dosya IPFS CID (Ağ Adresi):** `{file_cid}`")
                 
-                # --- YENİ İNDİRME BUTONU (st.download_button) ---
+                # --- SON ÇÖZÜM DENEMESİ: Dosya adını URL'ye ekleyerek indirmeyi zorlama ---
+                # IPFS/CID'den sonra dosya adı eklendi. Tarayıcı indirmeyi zorlar.
+                # Örn: https://cloudflare-ipfs.com/ipfs/<CID>/dosya_adi.txt
+                download_url = f"{CLOUDFLARE_GATEWAY}{file_cid}/{file_name}"
                 
-                # SADECE st.download_button'a basıldığında dosya içeriğini çekmek için basit bir kontrol kullanıyoruz.
-                # Bu kısım her zaman Streamlit'in yenilenmesi sırasında çalışır,
-                # bu yüzden butona basılıp basılmadığını kontrol etmek zor. 
-                # En basit çözüm: Veriyi her zaman çekmeye hazırla.
-                
-                file_content = fetch_file_from_ipfs(file_cid)
-                
-                if file_content:
-                    st.download_button(
-                        label=f"💾 Orijinal Dosyayı İndir ({file_name})",
-                        data=file_content,
-                        file_name=file_name, 
-                        mime='application/octet-stream', # Genel MIME türü indirmeyi zorlar
-                        help="Bu düğme, dosyayı IPFS'ten çekip tarayıcınıza doğrudan indirir."
-                    )
-                else:
-                    st.warning("Dosya içeriği IPFS'ten çekilemediği için indirme butonu devre dışı.")
+                st.link_button(
+                    f"💾 Orijinal Dosyayı İndir ({file_name})", 
+                    download_url,
+                    help="Bu düğme, Cloudflare IPFS Ağ Geçidi üzerinden orijinal dosyayı indirir."
+                )
             elif block.index == 0:
                 st.markdown("Bu, zincirin başlangıç bloğudur (Genesis). Dosya içeriği yoktur.")
             else:
-                st.warning("Dosya CID bilgisi bulunamadı.") # Veri eksikse burası tetiklenir
+                st.warning("Dosya CID bilgisi bulunamadı.")
