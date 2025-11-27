@@ -383,8 +383,8 @@ for block in reversed(blockchain.chain):
                 st.markdown(f"**Dosya IPFS CID (Ağ Adresi):** `{file_cid}`")
                 
                 # --- İNDİRME BUTONU ---
-                # DEĞİŞİKLİK: Pinata'yı indirmeye zorlamak için "?download=true" eklendi.
-                download_url = f"{PINATA_GATEWAY}{file_cid}?download=true"
+                # DEĞİŞİKLİK: Pinata'yı indirmeye zorlamak için "?content-disposition=attachment" eklendi.
+                download_url = f"{PINATA_GATEWAY}{file_cid}?content-disposition=attachment"
                 st.link_button(
                     f"💾 Orijinal Dosyayı İndir ({block.data.get('file_name', 'IPFS')})", 
                     download_url,
