@@ -314,8 +314,3 @@ for block in reversed(blockchain.chain):
     elif block.index == 0:
         with st.container():
             st.caption(f"🏁 Başlangıç Bloğu (Genesis) - {datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S')}")
-
-# Kenar Çubuğu (Sidebar) - Durum Bilgisi
-if os.path.exists(CID_FILE):
-    st.sidebar.markdown("---")
-    st.sidebar.caption("✅ IPFS Bağlantısı Aktif")
