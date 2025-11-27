@@ -66,19 +66,16 @@ def upload_file_to_ipfs(uploaded_file, file_name):
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
-    # --- YENİ EKLENTİ: Pinata'ya klasöre sarmalama yapmamasını söyleyen JSON ---
-    # Bu, dönen CID'nin doğrudan dosyanın kendisine ait olmasını sağlar.
+    # Dosyanın klasöre sarılmasını engelleyen ayar
     pinata_options = json.dumps({
         "pinataOptions": {
-            "wrapWithDirectory": False # Bu satır KLASÖRE SARMAYI engeller
+            "wrapWithDirectory": False 
         }
     })
 
     # Dosya içeriğini HTTP isteği için hazırlar
     files = {
-        # 'file' alanı dosyanın ikili verisi
         "file": (file_name, uploaded_file.getvalue(), uploaded_file.type),
-        # 'pinataOptions' alanı JSON ayarlarımız
         "pinataOptions": (None, pinata_options, "application/json") 
     }
     
@@ -119,10 +116,10 @@ def save_chain_to_ipfs(chain):
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
-    # --- YENİ EKLENTİ: Zinciri klasöre sarmalama yapmamasını söyleyen JSON ---
+    # Zincirin klasöre sarılmasını engelleyen ayar
     pinata_options = json.dumps({
         "pinataOptions": {
-            "wrapWithDirectory": False # Zincir dosyası da doğrudan CID olarak sabitlenmeli
+            "wrapWithDirectory": False 
         }
     })
     
@@ -173,7 +170,6 @@ def load_chain_from_ipfs():
 
         # Pinata Gateway üzerinden JSON dosyasını çek
         gateway_url = f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}"
-        # Zincir okuma sırasında Content-Disposition kullanmaya gerek yok.
         response = requests.get(gateway_url, timeout=10) 
         response.raise_for_status()
         
@@ -198,6 +194,35 @@ def load_chain_from_ipfs():
         st.warning(f"⚠️ Yükleme hatası ({e}). Yeni zincir başlatılıyor.")
         return None
 
+# --- YENİ FONKSİYON: IPFS'TEN DOSYAYI DOĞRUDAN ÇEKME (STREAMLIT İÇİN) ---
+
+def download_file_from_ipfs(file_cid):
+    """
+    Belirtilen CID'ye ait dosyanın ikili içeriğini Pinata Ağ Geçidi'nden 
+    doğrudan çekerek Streamlit'e indirme için hazırlar.
+    """
+    PINATA_JWT = get_pinata_jwt()
+    if not PINATA_JWT:
+        return None
+
+    # Doğrudan Pinata'nın API'si yerine, Ağ Geçidi (Gateway) üzerinden çekmeyi deniyoruz.
+    # Bu, API limitlerine takılmamızı önler.
+    gateway_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}"
+    
+    try:
+        # Not: Streamlit bu çağrıyı yapar ve kullanıcıya sonucu ikili veri olarak sunar.
+        response = requests.get(gateway_url, timeout=30)
+        response.raise_for_status() 
+        
+        # İkili dosya içeriğini döndür
+        return response.content
+    
+    except requests.exceptions.HTTPError as err:
+        st.error(f"❌ Dosya İndirme Hatası (HTTP): Dosya Pinata'da mevcut olmayabilir veya erişim reddedilmiştir. Hata: {err}")
+        return None
+    except Exception as e:
+        st.error(f"❌ Dosya İndirme sırasında bir hata oluştu: {e}")
+        return None
 
 # --- BLOCKCHAIN SINIFI ---
 
@@ -327,7 +352,6 @@ with st.container(border=True):
         if col_add.button("Blok Zincirine Ekle ve IPFS'e Kaydet", use_container_width=True):
             
             # --- ADIM 1: DOSYAYI IPFS'E YÜKLE ---
-            # Pinata'nın klasöre sarmalama yapmaması için ayarlama yapıldı.
             with st.spinner(f"Dosya '{uploaded_file.name}' IPFS'e yükleniyor..."):
                 file_cid = upload_file_to_ipfs(uploaded_file, uploaded_file.name)
             
@@ -427,34 +451,53 @@ for block in reversed(blockchain.chain):
             if file_cid:
                 st.markdown("---")
                 st.markdown(f"**Dosya IPFS CID (Ağ Adresi):** `{file_cid}`")
+
+                # --- 1. Doğrudan API/Streamlit İndirme Yöntemi ---
+                
+                # Dosya içeriğini indirme için bir kere çekiyoruz
+                file_content = download_file_from_ipfs(file_cid)
+                
+                if file_content:
+                    st.download_button(
+                        label=f"⬇️ Sunucu Üzerinden Dosyayı İndir ({file_name})",
+                        data=file_content,
+                        file_name=file_name,
+                        mime="application/octet-stream",
+                        use_container_width=True,
+                        help="Streamlit sunucusu dosya içeriğini Pinata'dan çeker ve size bir akış olarak sunar. Bu en güvenilir indirme yoludur."
+                    )
+                else:
+                    st.warning("Dosya içeriği Pinata'dan çekilemedi. CID'nin sabitlendiğinden emin olun.")
+                
+                st.markdown("---")
+                st.caption("Geleneksel Ağ Geçidi Linkleri (Yedekler):")
                 
                 # URL kodlama ile dosya adındaki boşluk veya özel karakterler sorun yaratmaz.
                 encoded_file_name = quote(file_name)
                 
-                # 1. Birincil İndirme Linki (Pinata)
+                # 2. Pinata Linki (Yedek)
                 pinata_download_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}?content-disposition=attachment;filename={encoded_file_name}"
                 
-                # 2. İkincil İndirme Linki (Cloudflare Fallback)
+                # 3. Cloudflare Linki (Yedek)
                 cloudflare_download_url = f"{CLOUDFLARE_GATEWAY}{file_cid}?content-disposition=attachment;filename={encoded_file_name}"
-                
-                # Pinata Butonu
-                st.link_button(
-                    f"💾 Pinata Üzerinden Dosyayı İndir (Önerilen)", 
-                    pinata_download_url,
-                    use_container_width=True,
-                    help="Bu Pinata'nın Ağ Geçidi üzerinden dosyanızı indirir."
-                )
 
-                st.markdown("---")
-                st.caption("Pinata linki çalışmazsa (ağ sorunu):")
+                col_link1, col_link2 = st.columns(2)
                 
-                # Cloudflare Butonu (Fallback)
-                st.link_button(
-                    f"☁️ Alternatif İndirme (Cloudflare)", 
-                    cloudflare_download_url,
-                    use_container_width=True,
-                    help="Cloudflare IPFS Ağ Geçidi üzerinden dosyanızı indirir."
-                )
+                with col_link1:
+                    st.link_button(
+                        f"Pinata Ağ Geçidi", 
+                        pinata_download_url,
+                        use_container_width=True,
+                        help="Tarayıcınızı doğrudan Pinata Ağ Geçidi'ne yönlendirir."
+                    )
+
+                with col_link2:
+                    st.link_button(
+                        f"Cloudflare Ağ Geçidi", 
+                        cloudflare_download_url,
+                        use_container_width=True,
+                        help="Tarayıcınızı Cloudflare Ağ Geçidi'ne yönlendirir."
+                    )
                 
             elif block.index > 0:
                 st.warning("Bu blokta dosya CID bilgisi bulunamadı veya Genesis Blok değil.")
