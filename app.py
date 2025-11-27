@@ -4,16 +4,11 @@ import time
 import json
 import os
 import io 
-import requests # Pinata (Uzak IPFS) ile iletişim için
+import requests 
 from datetime import datetime
 
 # --- GENEL SABİTLER ---
-
-# Pinata API'sine erişim için Streamlit Secrets kullanılır
-# Bu dosya, Streamlit Cloud'da kalıcılığı sağlamak için en son zincir CID'sini tutar.
-# UYARI: Streamlit Cloud'da bu dosya silineceği için, bu kalıcılık
-# sadece oturum süresince (veya kısa bir süre) geçerli olacaktır.
-# Gerçek kalıcılık için harici bir DB gereklidir, ancak bu Pinata entegrasyonu projenin değerini artırır.
+# Streamlit Cloud'da geçici olarak zincirin son CID'sini tutacak dosya adı.
 CID_FILE = "last_chain_cid.txt" 
 
 # --- SINIF TANIMLARI ---
@@ -30,7 +25,7 @@ class Block:
 
     def calculate_hash(self):
         """Bloğun tüm verilerini kullanarak SHA-256 hash'ini hesaplar."""
-        # Ensure that the dictionary includes all necessary attributes for hashing
+        # Hash hesaplaması için gerekli tüm özellikleri içerir
         block_data = {
             "index": self.index,
             "timestamp": self.timestamp,
@@ -38,39 +33,45 @@ class Block:
             "previous_hash": self.previous_hash,
             "nonce": self.nonce
         }
-        block_string = json.dumps(block_data, sort_keys=True).encode()
+        # JSON'a çevirip encode ediyoruz
+        block_string = json.dumps(block_data, sort_keys=True).encode('utf-8')
         return hashlib.sha256(block_string).hexdigest()
 
 # --- IPFS YÖNETİMİ VE KALICILIK FONKSİYONLARI (PINATA ÜZERİNDEN) ---
 
-def save_chain_to_ipfs(chain):
-    """Zinciri Pinata üzerinden IPFS'e yükler ve CID'yi döndürür."""
-    
-    # 1. Gerekli Pinata anahtarlarını Streamlit Secrets'ten çek
+def get_pinata_jwt():
+    """Streamlit Secrets'ten Pinata JWT'yi güvenli bir şekilde çeker."""
     try:
-        PINATA_JWT = st.secrets["pinata"]["jwt"]
+        # Streamlit, bu anahtarı otomatik olarak secrets.toml dosyasından çeker.
+        return st.secrets["pinata"]["jwt"]
     except KeyError:
         st.error("❌ Pinata JWT anahtarı bulunamadı. Lütfen `.streamlit/secrets.toml` dosyasını kontrol edin.")
         return None
 
-    # 2. JSON verisini hazırla
+def save_chain_to_ipfs(chain):
+    """Zinciri Pinata üzerinden IPFS'e yükler ve CID'yi döndürür."""
+    
+    PINATA_JWT = get_pinata_jwt()
+    if not PINATA_JWT:
+        return None
+
+    # Prepare chain data for serialization
     serializable_chain = [block.__dict__ for block in chain]
     chain_json = json.dumps(serializable_chain, indent=4)
     
-    # 3. Yükleme isteği için URL ve Başlıkları hazırla
     url = "https://api.pinata.cloud/pinning/pinFileToIPFS"
     headers = {
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
-    # Pinata'ya dosya yüklemek için "multipart/form-data" formatı gerekir.
+    # Prepare data for multipart/form-data upload
     files = {
-        "file": ("blockchain.json", chain_json, "application/json")
+        "file": ("blockchain.json", chain_json.encode('utf-8'), "application/json")
     }
     
     try:
-        response = requests.post(url, headers=headers, files=files)
-        response.raise_for_status() # HTTP hatası varsa istisna fırlat
+        response = requests.post(url, headers=headers, files=files, timeout=30)
+        response.raise_for_status() # Raise exception for bad status codes (4xx or 5xx)
         
         res_data = response.json()
         new_cid = res_data.get('IpfsHash')
@@ -79,7 +80,7 @@ def save_chain_to_ipfs(chain):
             st.error(f"❌ Pinata CID döndürmedi: {res_data.get('error', 'Bilinmeyen Hata')}")
             return None
         
-        # 4. Yeni CID'yi yerel dosyaya kaydet (Streamlit'in geçici dosya sisteminde bile)
+        # Save the new CID to the temporary file for the next session/rerun
         with open(CID_FILE, 'w') as f:
             f.write(new_cid)
             
@@ -95,7 +96,6 @@ def save_chain_to_ipfs(chain):
 def load_chain_from_ipfs():
     """Son CID'yi okur ve zinciri IPFS'ten geri yükler."""
     
-    # Streamlit Cloud'da CID_FILE'ın kaybolması muhtemeldir.
     if not os.path.exists(CID_FILE):
         return None
         
@@ -109,15 +109,17 @@ def load_chain_from_ipfs():
 
         # 2. Veriyi Pinata Ağ Geçidi üzerinden çek
         gateway_url = f"https://gateway.pinata.cloud/ipfs/{last_cid}"
-        response = requests.get(gateway_url, timeout=10) # 10 saniye zaman aşımı
-        response.raise_for_status()
+        response = requests.get(gateway_url, timeout=10) 
+        response.raise_for_status() # Raise exception for bad status codes
         
         raw_chain = response.json()
         
         # 3. JSON'dan Blok nesnelerine geri yükle
         restored_chain = []
         for block_data in raw_chain:
+            # Recreate block object
             block = Block(block_data['index'], block_data['previous_hash'], block_data['data'])
+            # Restore original timestamp, hash, and nonce values
             block.timestamp = block_data['timestamp']
             block.hash = block_data['hash']
             block.nonce = block_data['nonce']
@@ -128,7 +130,6 @@ def load_chain_from_ipfs():
 
     except requests.exceptions.HTTPError as err:
         st.warning(f"⚠️ IPFS Ağ Geçidi Hatası. CID doğru değil veya pinlenmemiş olabilir. Hata: {err}")
-        # Bu durumda zincir sıfırlanacaktır.
         return None
     except Exception as e:
         st.warning(f"⚠️ Yükleme hatası. Yeni zincir başlatılıyor. Hata: {e}")
@@ -139,7 +140,7 @@ def load_chain_from_ipfs():
 class Blockchain:
     """Tüm blok zincirini yönetir."""
     def __init__(self):
-        # Eğer session state'de zincir yoksa, IPFS'ten veya sıfırdan oluştur
+        # Use session_state to maintain the chain across reruns
         if 'chain' not in st.session_state:
             
             restored_chain = load_chain_from_ipfs()
@@ -147,36 +148,35 @@ class Blockchain:
             if restored_chain:
                 st.session_state.chain = restored_chain
             else:
-                # Dosya yoksa veya yüklenemezse, yeni listeyi oluştur ve Genesis'i çağır
+                # If restoration fails or it's the first run, initialize and create Genesis
                 st.session_state.chain = []
-                self.chain = st.session_state.chain # self.chain'i Genesis'ten önce tanımla
+                self.chain = st.session_state.chain 
                 self.create_genesis_block()
         
-        # self.chain'i her zaman session state'e bağla
+        # Always link the instance variable to the session state
         self.chain = st.session_state.chain
 
     @property
     def last_block(self):
         """Zincirdeki son bloğu döndürür. Zincir boşsa None döndürür."""
+        # Handles IndexError: list index out of range
         return self.chain[-1] if self.chain else None
 
     def new_block(self, data, previous_hash=None):
         """Zincire yeni bir blok ekler ve IPFS'e kaydeder."""
         
-        # Güvenli previous_hash alımı
-        if previous_hash is None and self.last_block:
-            last_block_hash = self.last_block.hash
-        else:
-            last_block_hash = "0"
+        # Securely determine the previous hash: use last block's hash or "0" for Genesis
+        last_block_hash = self.last_block.hash if self.last_block else "0"
         
         block = Block(len(self.chain), last_block_hash, data) 
         
+        # Set nonce and calculate hash
         block.nonce = int(time.time() * 1000) % 100000 
         block.hash = block.calculate_hash() 
 
         self.chain.append(block)
         
-        # *** IPFS Kalıcılık Adımı ***
+        # IPFS Persistence Step
         new_cid = save_chain_to_ipfs(self.chain) 
         if new_cid:
              st.sidebar.success(f"IPFS'e kaydedildi. CID: {new_cid[:10]}...")
@@ -184,49 +184,52 @@ class Blockchain:
         return block
 
     def create_genesis_block(self):
-        """Zincirin ilk bloğunu (Genesis Block) oluşturur."""
+        """Creates the first block of the chain (Genesis Block)."""
         genesis_block = self.new_block(data="Genesis Block", previous_hash="0")
         st.success("✨ Yeni bir Blockchain başlatıldı (IPFS'e kaydediliyor).")
         
     def is_chain_valid(self):
-        """Zincirin geçerliliğini kontrol eder."""
+        """Checks the validity of the entire chain."""
         for i in range(1, len(self.chain)):
             current_block = self.chain[i]
             previous_block = self.chain[i-1]
 
+            # 1. Check if the block's hash is correctly calculated
             if current_block.hash != current_block.calculate_hash():
                 return False, f"Hata: Blok {current_block.index} hash'i geçersiz."
             
+            # 2. Check if the block correctly links to the previous hash
             if current_block.previous_hash != previous_block.hash:
                 return False, f"Hata: Blok {current_block.index} önceki bloğa bağlı değil."
             
         return True, "Blockchain tamamen geçerlidir. Değişiklik yok."
 
-# --- YARDIMCI VE HASHLEME FONKSİYONLARI ---
+# --- HELPER AND HASHING FUNCTIONS ---
 
 def hash_file(uploaded_file):
-    """Yüklenen dosyanın SHA-256 hash'ini hesaplar."""
+    """Calculates the SHA-256 hash of the uploaded file."""
     hasher = hashlib.sha256()
     file_bytes = io.BytesIO(uploaded_file.getvalue())
     
+    # Read file in chunks to handle large files
     for chunk in iter(lambda: file_bytes.read(4096), b""):
         hasher.update(chunk)
     
-    uploaded_file.seek(0)
+    uploaded_file.seek(0) # Reset file pointer for further processing
     return hasher.hexdigest()
 
-# --- ANA UYGULAMA YAPISI ---
+# --- MAIN APPLICATION STRUCTURE ---
 
 st.set_page_config(page_title="IPFS Kalıcılıklı Blockchain", layout="wide")
 
-# Blockchain örneğini oluştur
+# Blockchain instance is created, which handles loading from IPFS
 blockchain = Blockchain()
 
 st.title("🔗 IPFS Kalıcılıklı Merkeziyetsiz Blockchain")
 st.markdown("Veri zinciri, Pinata API'si üzerinden IPFS ağına kaydedilir.")
 st.divider()
 
-# --- BLOK EKLEME BÖLÜMÜ (Sidebar) ---
+# --- BLOCK ADDITION SECTION (Sidebar) ---
 st.sidebar.header("📁 Yeni Blok Ekle (Pinata API Kullanılır)")
 uploaded_file = st.sidebar.file_uploader(
     "Blok Zincirine Kayıt Edilecek Dosyayı Yükleyin", 
@@ -249,17 +252,16 @@ if uploaded_file is not None:
     st.sidebar.json(block_data)
     
     if st.sidebar.button("Blok Zincirine Ekle ve IPFS'e Kaydet"):
-        prev_hash = blockchain.last_block.hash if blockchain.last_block else "0"
-            
+        
+        # Call new_block without explicit previous_hash, as the method handles it securely
         new_block = blockchain.new_block(
-            data=block_data,
-            previous_hash=prev_hash
+            data=block_data
         )
         st.success(f"🎉 **{uploaded_file.name}** dosyası blok zincirine başarıyla eklendi!")
         st.balloons()
         st.rerun()
 
-# --- ZİNCİRİ GÖRÜNTÜLEME BÖLÜMÜ (Main Content) ---
+# --- CHAIN DISPLAY SECTION (Main Content) ---
 
 st.header(f"⛓️ Blok Zinciri ({len(blockchain.chain)} Blok)")
 
@@ -269,8 +271,11 @@ if is_valid:
 else:
     st.error(f"Durum: 🚨 {message} 🚨")
 
+# Display blocks in reverse order (newest first)
 for block in reversed(blockchain.chain):
-    with st.expander(f"Blok #{block.index} - Hash: {block.hash[:15]}...", expanded=block.index == len(blockchain.chain) - 1 and len(blockchain.chain) > 1):
+    # Expanded only for the latest block (if there is more than one block)
+    is_latest = block.index == len(blockchain.chain) - 1 and len(blockchain.chain) > 1
+    with st.expander(f"Blok #{block.index} - Hash: {block.hash[:15]}...", expanded=is_latest):
         
         col1, col2 = st.columns(2)
         
@@ -291,7 +296,7 @@ for block in reversed(blockchain.chain):
         st.markdown(f"**Bloğun Kendi Hash'i:**")
         st.code(block.hash)
 
-# --- CID YÖNETİMİ ---
+# --- CID MANAGEMENT ---
 
 st.sidebar.markdown("---")
 st.sidebar.header("IPFS Kalıcılık Durumu")
@@ -309,42 +314,11 @@ else:
 
 if st.sidebar.button("🚨 CID Dosyasını Sil (Sıfırla)"):
     try:
-        os.remove(CID_FILE)
+        if os.path.exists(CID_FILE):
+             os.remove(CID_FILE)
+        # Reset session state chain to ensure fresh start
         st.session_state.chain = []
-        st.sidebar.success("CID dosyası silindi. Uygulama bir sonraki yenilemede sıfırdan başlayacak.")
+        st.sidebar.success("CID dosyası silindi. Uygulama sıfırdan başlatılacak.")
         st.rerun()
     except Exception as e:
         st.sidebar.error(f"Dosya silinirken hata: {e}")
-```
-eof
-
----
-
-## 🛠️ Kod Dışı Yapılması Gerekenler (Dağıtım İçin Zorunlu)
-
-Streamlit Cloud'da bu uygulamanın Pinata API'sine bağlanabilmesi için aşağıdaki iki adımı kesinlikle yapmalısınız:
-
-### Adım 1: Gereksinim Dosyası Oluşturma
-
-Proje klasörünüzde **`requirements.txt`** adında bir dosya oluşturun ve içine şu kütüphaneleri ekleyin:
-
-**`requirements.txt`**
-```
-streamlit
-requests
-```
-
-### Adım 2: Pinata Anahtarlarını Streamlit Secrets'e Ekleme
-
-Hassas API anahtarlarınızı doğrudan koda yazmak yerine, Streamlit'in güvenli mekanizması olan `secrets.toml` dosyasını kullanmalısınız.
-
-1.  Projenizin kök dizininde **`.streamlit`** adında bir klasör oluşturun.
-2.  Bu klasörün içine **`secrets.toml`** adında bir dosya oluşturun.
-3.  Pinata hesabınızdan aldığınız **JWT** (JSON Web Token) anahtarını aşağıdaki formatta bu dosyaya ekleyin:
-
-**`.streamlit/secrets.toml`**
-```toml
-[pinata]
-# SİZİN PINATA JWT TOKEN'INIZ BURAYA GELMELİ.
-# JWT, Pinata API ile kimlik doğrulaması yapmanın en güvenli yoludur.
-jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySW5mb3JtY... (Devamı)"
