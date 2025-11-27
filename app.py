@@ -8,13 +8,14 @@ import requests
 from datetime import datetime
 
 # --- GENEL SABİTLER ---
-# Streamlit Cloud'da geçici olarak zincirin son CID'sini tutacak dosya adı.
+# Streamlit Cloud'da zincirin son CID'sini (Content Identifier) tutacak geçici dosya.
 CID_FILE = "last_chain_cid.txt" 
-# Pinata sadece yükleme ve zincir okuma için kullanılır.
+# Pinata API yükleme adresi.
 PINATA_GATEWAY_UPLOAD = "https://api.pinata.cloud/"
-# Zincir okuma için kullanılacak Pinata Ağ Geçidi
+# Zincir okuma ve dosya indirme için kullanılacak Pinata Ağ Geçidi.
+# NOT: Bu adres, tarayıcıda doğrudan erişim ve indirme için en güvenilir olandır.
 PINATA_GATEWAY_DOWNLOAD = PINATA_GATEWAY_UPLOAD.replace("api.", "gateway.") + "ipfs/" 
-# İndirme linki için kullanılacak Cloudflare Ağ Geçidi (En stabil olanıdır)
+# Cloudflare Ağ Geçidi (Erişim sorunu olduğu için indirme linkinde kullanılmıyor).
 CLOUDFLARE_GATEWAY = "https://cloudflare-ipfs.com/ipfs/" 
 
 # --- SINIF TANIMLARI ---
@@ -38,7 +39,7 @@ class Block:
             "previous_hash": self.previous_hash,
             "nonce": self.nonce
         }
-        # Not: Eğer 'data' None ise, json.dumps hata vermez, ancak bu yapıda 'data' her zaman olmalıdır.
+        # JSON verisini sıralayıp hash'liyoruz.
         block_string = json.dumps(block_data, sort_keys=True).encode('utf-8')
         return hashlib.sha256(block_string).hexdigest()
 
@@ -47,6 +48,7 @@ class Block:
 def get_pinata_jwt():
     """Streamlit Secrets'ten Pinata JWT'yi güvenli bir şekilde çeker."""
     try:
+        # JWT, Streamlit'in .streamlit/secrets.toml dosyasından okunur.
         return st.secrets["pinata"]["jwt"]
     except KeyError:
         st.error("❌ Pinata JWT anahtarı bulunamadı. Lütfen `.streamlit/secrets.toml` dosyasını kontrol edin.")
@@ -64,13 +66,15 @@ def upload_file_to_ipfs(uploaded_file, file_name):
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
+    # Dosya içeriğini HTTP isteği için hazırlar
     files = {
         "file": (file_name, uploaded_file.getvalue(), uploaded_file.type)
     }
     
     try:
+        # Dosya yükleme isteği
         response = requests.post(url, headers=headers, files=files, timeout=60)
-        response.raise_for_status() 
+        response.raise_for_status() # Hata durumunda istisna fırlatır
         
         res_data = response.json()
         file_cid = res_data.get('IpfsHash')
@@ -95,6 +99,7 @@ def save_chain_to_ipfs(chain):
     if not PINATA_JWT:
         return None
 
+    # Blok nesnelerini JSON'a dönüştürmek için sözlük listesine çeviririz.
     serializable_chain = [block.__dict__ for block in chain]
     chain_json = json.dumps(serializable_chain, indent=4)
     
@@ -103,6 +108,7 @@ def save_chain_to_ipfs(chain):
         "Authorization": f"Bearer {PINATA_JWT}"
     }
     
+    # Zinciri bir JSON dosyası olarak yükler
     files = {
         "file": ("blockchain.json", chain_json.encode('utf-8'), "application/json")
     }
@@ -118,7 +124,7 @@ def save_chain_to_ipfs(chain):
             st.error(f"❌ Pinata zincir CID'si döndürmedi: {res_data.get('error', 'Bilinmeyen Hata')}")
             return None
         
-        # Yeni CID'yi geçici dosyaya kaydet
+        # Yeni CID'yi geçici dosyaya kaydet, böylece uygulama yeniden başlatıldığında zincir yüklenebilir.
         with open(CID_FILE, 'w') as f:
             f.write(new_cid)
             
@@ -134,17 +140,19 @@ def save_chain_to_ipfs(chain):
 def load_chain_from_ipfs():
     """Son CID'yi okur ve zinciri IPFS'ten geri yükler."""
     
+    # Geçici CID dosyası yoksa, zincir yüklenemez.
     if not os.path.exists(CID_FILE):
         return None
         
     try:
+        # Son CID'yi dosyadan oku
         with open(CID_FILE, 'r') as f:
             last_cid = f.read().strip()
         
         if not last_cid:
             return None
 
-        # Zincir okuma için Pinata Gateway kullanılıyor
+        # Pinata Gateway üzerinden JSON dosyasını çek
         gateway_url = f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}"
         response = requests.get(gateway_url, timeout=10) 
         response.raise_for_status()
@@ -152,9 +160,11 @@ def load_chain_from_ipfs():
         raw_chain = response.json()
         
         restored_chain = []
+        # JSON verisini tekrar Blok nesnelerine dönüştür
         for block_data in raw_chain:
             data_content = block_data.get('data', None)
             
+            # Blok nesnesini oluştur ve tüm hash/nonce/zaman damgası verilerini geri yükle
             block = Block(block_data['index'], block_data['previous_hash'], data_content)
             block.timestamp = block_data['timestamp']
             block.hash = block_data['hash']
@@ -165,7 +175,7 @@ def load_chain_from_ipfs():
         return restored_chain
 
     except Exception as e:
-        st.warning(f"⚠️ Yükleme hatası. Yeni zincir başlatılıyor. Hata: {e}")
+        st.warning(f"⚠️ Yükleme hatası ({e}). Yeni zincir başlatılıyor.")
         return None
 
 
@@ -174,6 +184,7 @@ def load_chain_from_ipfs():
 class Blockchain:
     """Tüm blok zincirini yönetir."""
     def __init__(self):
+        # Session state ile zincirin kalıcı olmasını sağla
         if 'chain' not in st.session_state:
             
             restored_chain = load_chain_from_ipfs()
@@ -183,13 +194,13 @@ class Blockchain:
             else:
                 st.session_state.chain = []
                 self.chain = st.session_state.chain 
-                self.create_genesis_block()
+                self.create_genesis_block() # Yeni zincir başlat
         
         self.chain = st.session_state.chain
 
     @property
     def last_block(self):
-        """Zincirdeki son bloğu döndürür. Zincir boşsa None döndürür."""
+        """Zincirdeki son bloğu döndürür."""
         return self.chain[-1] if self.chain else None
 
     def new_block(self, data, previous_hash=None):
@@ -199,6 +210,7 @@ class Blockchain:
         
         block = Block(len(self.chain), last_block_hash, data) 
         
+        # Basit "Proof of Work" (sadece nonce'u güncel zamanla set et)
         block.nonce = int(time.time() * 1000) % 100000 
         block.hash = block.calculate_hash() 
 
@@ -215,14 +227,16 @@ class Blockchain:
         st.success("✨ Yeni bir Blockchain başlatıldı (IPFS'e kaydediliyor).")
         
     def is_chain_valid(self):
-        """Zincirin geçerliliğini kontrol eder."""
+        """Zincirin geçerliliğini kontrol eder (Kendi hash'i ve önceki bloğun hash'i)."""
         for i in range(1, len(self.chain)):
             current_block = self.chain[i]
             previous_block = self.chain[i-1]
 
+            # 1. Kendi hash'i doğru hesaplanmış mı?
             if current_block.hash != current_block.calculate_hash():
                 return False, f"Hata: Blok {current_block.index} hash'i geçersiz."
             
+            # 2. Önceki bloğa doğru bağlanmış mı?
             if current_block.previous_hash != previous_block.hash:
                 return False, f"Hata: Blok {current_block.index} önceki bloğa bağlı değil."
             
@@ -233,11 +247,14 @@ class Blockchain:
 def hash_file(uploaded_file):
     """Yüklenen dosyanın SHA-256 hash'ini hesaplar."""
     hasher = hashlib.sha256()
+    # Dosya içeriğini bellekteki ikili veriden okur
     file_bytes = io.BytesIO(uploaded_file.getvalue())
     
+    # Büyük dosyalar için parçalar halinde oku ve hash'e ekle
     for chunk in iter(lambda: file_bytes.read(4096), b""):
         hasher.update(chunk)
     
+    # Hashleme sonrası dosya işaretçisini başa al
     uploaded_file.seek(0)
     return hasher.hexdigest()
 
@@ -249,19 +266,18 @@ st.set_page_config(page_title="IPFS Kalıcılıklı Blockchain", layout="wide")
 blockchain = Blockchain()
 
 st.title("🔗 IPFS Kalıcılıklı Merkeziyetsiz Blockchain")
-st.markdown("Hem blok zinciri hem de yüklenen dosyalar Pinata API'si üzerinden IPFS ağına kaydedilir.")
+st.markdown("Hem blok zinciri hem de yüklenen dosyaların kalıcılığı **Pinata API**'si üzerinden **IPFS** ağına kaydedilir.")
 st.divider()
 
 # -----------------------------------------------------
-# YENİ ÜST KONTROL BÖLÜMÜ (Sidebar yerine ana içerikte)
+# YENİ ÜST KONTROL BÖLÜMÜ
 # -----------------------------------------------------
 with st.container(border=True):
     
-    # İki kolona ayır: 1) Blok Ekleme 2) Kalıcılık Durumu
     col_add, col_status = st.columns([3, 1])
 
     with col_add:
-        st.subheader("📁 Yeni Blok Ekle (Pinata API Kullanılır)")
+        st.subheader("📁 Yeni Blok Ekle ve Dosyayı IPFS'e Sabitle")
         
         uploaded_file = st.file_uploader(
             "Blok Zincirine Kayıt Edilecek Dosyayı Yükleyin", 
@@ -285,16 +301,17 @@ with st.container(border=True):
         }
         
         col_add.markdown("---")
-        col_add.markdown("**Oluşturulacak Blok Verisi:**")
+        col_add.markdown("**Oluşturulacak Blok Verisi Önizlemesi:**")
         col_add.json(preview_data)
         
-        if col_add.button("Blok Zincirine Ekle ve IPFS'e Kaydet"):
+        if col_add.button("Blok Zincirine Ekle ve IPFS'e Kaydet", use_container_width=True):
             
-            # --- ÖNEMLİ ADIM 1: DOSYAYI IPFS'E YÜKLE ---
-            file_cid = upload_file_to_ipfs(uploaded_file, uploaded_file.name)
+            # --- ADIM 1: DOSYAYI IPFS'E YÜKLE ---
+            with st.spinner(f"Dosya '{uploaded_file.name}' IPFS'e yükleniyor..."):
+                file_cid = upload_file_to_ipfs(uploaded_file, uploaded_file.name)
             
             if file_cid:
-                # --- ÖNEMLİ ADIM 2: BLOK VERİSİNİ OLUŞTUR ---
+                # --- ADIM 2: BLOK VERİSİNİ OLUŞTUR ---
                 block_data = {
                     "file_name": uploaded_file.name,
                     "file_hash": file_hash,
@@ -302,23 +319,26 @@ with st.container(border=True):
                     "file_cid": file_cid 
                 }
                 
-                # --- ÖNEMLİ ADIM 3: BLOK ZİNCİRİNE EKLE ---
-                new_block = blockchain.new_block(data=block_data)
+                # --- ADIM 3: BLOK ZİNCİRİNE EKLE ---
+                with st.spinner("Yeni blok zincire ekleniyor ve son durum IPFS'e sabitleniyor..."):
+                    new_block = blockchain.new_block(data=block_data)
                 
-                st.toast(f"🎉 Dosya CID'si blok zincirine eklendi!")
+                st.toast(f"🎉 Dosya CID'si blok zincirine eklendi! Yeni Blok #{new_block.index}")
                 st.balloons()
                 st.rerun()
 
     with col_status:
-        st.subheader("IPFS Kalıcılık Durumu")
+        st.subheader("IPFS Zincir Durumu")
         st.markdown("---")
         
         if os.path.exists(CID_FILE):
             try:
                 with open(CID_FILE, 'r') as f:
                     last_cid = f.read().strip()
-                    st.info(f"Son Zincir CID'si: `{last_cid[:10]}...`")
-                    st.link_button("IPFS Zincirini Pinata'da Görüntüle", f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}", help="Bu CID, zincirin son durumunu gösterir.")
+                    st.success("Zincir IPFS'e sabitlendi.")
+                    st.info(f"Son Zincir CID: `{last_cid[:10]}...`")
+                    # Son CID'nin adresini Pinata'da görüntüle
+                    st.link_button("IPFS Zincirini Pinata'da Görüntüle", f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}", help="Bu link, zincirinizin son durumunu Pinata Ağ Geçidi'nde gösterir.")
             except:
                 st.error("CID dosyası okunamıyor.")
         else:
@@ -327,7 +347,7 @@ with st.container(border=True):
 st.divider()
 
 # -----------------------------------------------------
-# ZİNCİRİ GÖRÜNTÜLEME BÖLÜMÜ (Ana İçerik)
+# ZİNCİRİ GÖRÜNTÜLEME BÖLÜMÜ
 # -----------------------------------------------------
 
 st.header(f"⛓️ Blok Zinciri ({len(blockchain.chain)} Blok)")
@@ -336,31 +356,32 @@ is_valid, message = blockchain.is_chain_valid()
 if is_valid:
     st.success(f"Durum: {message}")
 else:
-    st.error(f"Durum: 🚨 {message} 🚨")
+    st.error(f"Durum: 🚨 Zincir Geçersiz: {message} 🚨")
 
 # Blokları tersten göster (en yeni en üstte)
 for block in reversed(blockchain.chain):
     header_text = f"Blok #{block.index}"
-    if block.index > 0 and block.data:
+    if block.index > 0 and isinstance(block.data, dict):
         header_text += f" - Dosya: {block.data.get('file_name', 'Bilinmiyor')}"
         
     is_latest = block.index == len(blockchain.chain) - 1 and len(blockchain.chain) > 1
     
+    # Blok detaylarını expander içinde göster
     with st.expander(f"{header_text} | Hash: {block.hash[:15]}...", expanded=is_latest):
         
-        # CID ve diğer bilgileri yan yana göstermek için kolonlar
         col1, col2 = st.columns(2)
         
         # block.data'dan bilgileri güvenli bir şekilde çekme
         if isinstance(block.data, dict):
             file_cid = block.data.get('file_cid')
-            file_name = block.data.get('file_name', 'indirilen_dosya')
+            # Dosya adı indirme linki için gereklidir
+            file_name = block.data.get('file_name', f'indirilen_dosya_{block.index}')
         else:
             file_cid = None
             file_name = 'indirilen_dosya'
             
         with col1:
-            st.subheader("Blok Bilgileri")
+            st.subheader("Blok Meta Bilgileri")
             st.markdown(f"**Index:** `{block.index}`")
             st.markdown(f"**Zaman Damgası:** `{datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S')}`")
             st.markdown(f"**Nonce:** `{block.nonce}`")
@@ -368,34 +389,34 @@ for block in reversed(blockchain.chain):
             
             if isinstance(block.data, dict) and block.index > 0:
                  st.markdown("---")
-                 st.subheader("Ek Meta Verileri")
+                 st.subheader("Ek Kullanıcı Verileri")
                  st.json({
                      "Dosya Hash": block.data.get('file_hash'),
                      "Ek Not": block.data.get('note')
                  })
-            elif block.data is None:
-                 st.error("⚠️ Blok Verisi (Payload) Eksik veya Geçersiz (None).")
+            elif block.index == 0:
+                st.info("Bu zincirin başlangıç bloğudur (Genesis Block).")
+            else:
+                 st.error("⚠️ Blok Verisi (Payload) Eksik veya Geçersiz.")
         
         with col2:
-            st.subheader("Bloğun Hash ve Dosya Adresi")
-            st.markdown(f"**Bloğun Kendi Hash'i:**")
+            st.subheader("Bloğun Hash ve IPFS Linki")
+            st.markdown(f"**Bloğun Kendi Hash'i (Blok Kimliği):**")
             st.code(block.hash)
             
             if file_cid:
                 st.markdown("---")
                 st.markdown(f"**Dosya IPFS CID (Ağ Adresi):** `{file_cid}`")
                 
-                # --- SON ÇÖZÜM DENEMESİ: Dosya adını URL'ye ekleyerek indirmeyi zorlama ---
-                # IPFS/CID'den sonra dosya adı eklendi. Tarayıcı indirmeyi zorlar.
-                # Örn: https://cloudflare-ipfs.com/ipfs/<CID>/dosya_adi.txt
-                download_url = f"{CLOUDFLARE_GATEWAY}{file_cid}/{file_name}"
+                # --- ÇÖZÜM: Pinata Ağ Geçidi ve dosya adı eklenerek direkt indirme linki oluşturma ---
+                # Pinata Ağ Geçidi + CID + Dosya Adı, indirmeyi en güvenilir şekilde başlatır.
+                download_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}/{file_name}"
                 
                 st.link_button(
                     f"💾 Orijinal Dosyayı İndir ({file_name})", 
                     download_url,
-                    help="Bu düğme, Cloudflare IPFS Ağ Geçidi üzerinden orijinal dosyayı indirir."
+                    use_container_width=True,
+                    help=f"Bu düğme, Pinata'nın kendi Ağ Geçidi üzerinden orijinal dosyayı indirir. Adres: {PINATA_GATEWAY_DOWNLOAD}"
                 )
-            elif block.index == 0:
-                st.markdown("Bu, zincirin başlangıç bloğudur (Genesis). Dosya içeriği yoktur.")
-            else:
-                st.warning("Dosya CID bilgisi bulunamadı.")
+            elif block.index > 0:
+                st.warning("Bu blokta dosya CID bilgisi bulunamadı veya Genesis Blok değil.")
