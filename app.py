@@ -13,13 +13,41 @@ CID_FILE = "last_chain_cid.txt"
 PINATA_GATEWAY_UPLOAD = "https://api.pinata.cloud/"
 
 # İndirme için kullanılacak Yedekli Ağ Geçidi Listesi
-# Kod, sırasıyla bunları deneyerek en hızlısını bulacaktır.
 IPFS_GATEWAYS = [
     "https://gateway.pinata.cloud/ipfs/",
     "https://cloudflare-ipfs.com/ipfs/",
     "https://ipfs.io/ipfs/",
     "https://dweb.link/ipfs/"
 ]
+
+# --- SAYFA AYARLARI VE CSS TASARIMI ---
+st.set_page_config(page_title="Blockchain Dosya Paylaşımı", layout="wide", page_icon="📂")
+
+# Arka planı beyaz, yazıları koyu yapmak için CSS enjeksiyonu
+st.markdown("""
+<style>
+    /* Ana arka plan */
+    .stApp {
+        background-color: #ffffff;
+        color: #1f1f1f;
+    }
+    /* Input alanları ve kutular */
+    .stTextInput > div > div > input, .stFileUploader {
+        background-color: #f0f2f6;
+        color: black;
+    }
+    /* Expander başlıkları */
+    .streamlit-expanderHeader {
+        background-color: #f8f9fa;
+        color: #31333F;
+        border-radius: 5px;
+    }
+    /* Butonlar */
+    .stButton > button {
+        border-radius: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # --- SINIF TANIMLARI ---
 
@@ -62,7 +90,6 @@ def upload_file_to_ipfs(uploaded_file, file_name):
     url = PINATA_GATEWAY_UPLOAD + "pinning/pinFileToIPFS"
     headers = {"Authorization": f"Bearer {PINATA_JWT}"}
     
-    # Klasöre sarmalamayı devre dışı bırak (Doğrudan dosya CID'si al)
     pinata_options = json.dumps({"pinataOptions": {"wrapWithDirectory": False}})
 
     files = {
@@ -108,41 +135,33 @@ def save_chain_to_ipfs(chain):
         st.error(f"❌ Zincir Yükleme Hatası: {e}")
         return None
 
-# --- YENİ MODEL: YEDEKLİ AĞ GEÇİDİ İNDİRİCİSİ ---
+# --- YEDEKLİ AĞ GEÇİDİ İNDİRİCİSİ ---
 
 def fetch_file_with_redundancy(file_cid):
-    """
-    Dosyayı indirmek için sırasıyla farklı IPFS ağ geçitlerini dener.
-    İlk başarılı olanın içeriğini döndürür.
-    """
-    
-    status_text = st.empty() # Durum mesajlarını güncellemek için
+    """Dosyayı indirmek için sırasıyla farklı IPFS ağ geçitlerini dener."""
+    status_text = st.empty()
     status_text.info(f"🔄 Dosya aranıyor... (CID: `{file_cid[:10]}...`)")
-    
     logs = [] 
     
     for gateway in IPFS_GATEWAYS:
         target_url = f"{gateway}{file_cid}"
         try:
-            # 15 saniye zaman aşımı ile dene
             response = requests.get(target_url, timeout=15)
-            
             if response.status_code == 200:
                 status_text.success(f"✅ Dosya `{gateway}` üzerinden başarıyla çekildi!")
+                time.sleep(1) # Kullanıcı başarı mesajını görsün
+                status_text.empty() # Mesajı temizle
                 return response.content
             else:
                 logs.append(f"❌ {gateway}: HTTP {response.status_code}")
-                
         except requests.exceptions.Timeout:
             logs.append(f"⏳ {gateway}: Zaman aşımı")
         except Exception as e:
             logs.append(f"⚠️ {gateway}: Hata")
             
-    # Başarısız olursa detayları göster
     status_text.error("Dosya hiçbir ağ geçidinden çekilemedi.")
     with st.expander("Hata Detayları"):
         for log in logs: st.write(log)
-    
     return None
 
 def load_chain_from_ipfs():
@@ -177,7 +196,7 @@ def load_chain_from_ipfs():
         return restored_chain
     except: return None
 
-# --- BLOCKCHAIN VE UI ---
+# --- BLOCKCHAIN MANTIĞI ---
 
 class Blockchain:
     def __init__(self):
@@ -223,91 +242,103 @@ def hash_file(uploaded_file):
     uploaded_file.seek(0)
     return hasher.hexdigest()
 
-# --- ARAYÜZ ---
+# --- ARAYÜZ (GÜNCELLENMİŞ TASARIM) ---
 
-st.set_page_config(page_title="Multi-Gateway Blockchain", layout="wide")
 blockchain = Blockchain()
 
-st.title("🔗 Çoklu Ağ Geçidi Destekli Blockchain")
-st.markdown("Veriler Pinata'ya yüklenir, indirme işlemi ise **en hızlı yanıt veren** IPFS ağ geçidinden yapılır.")
+st.title("BLOCKCHAİN DOSYA PAYLAŞIMI")
+st.markdown("""
+Bu platform, **merkeziyetsiz ve güvenli** dosya paylaşımı sağlar. Yüklediğiniz veriler **Pinata** aracılığıyla IPFS ağına kalıcı olarak işlenir. 
+Dosyalarınıza **açıklama ekleyebilir**, tamamen **anonim** bir şekilde paylaşım yapabilirsiniz. Kimliğiniz gizli kalır ve verileriniz değiştirilemez bir blok zinciri üzerinde saklanır.
+""")
 st.divider()
 
+# Dosya Ekleme Bölümü
 with st.container(border=True):
     col1, col2 = st.columns([3, 1])
     with col1:
-        st.subheader("📁 Yeni Dosya Ekle")
-        uploaded_file = st.file_uploader("Dosya Seç", type=None)
-        user_note = st.text_input("Not:", max_chars=100)
+        st.subheader("DOSYA EKLE")
+        uploaded_file = st.file_uploader("Bir dosya seçin veya sürükleyin", type=None)
+        user_note = st.text_input("Açıklama Ekle:", max_chars=100, placeholder="Dosya hakkında kısa bir bilgi...")
     
-    if uploaded_file and col1.button("Blok Ekle ve Kaydet", use_container_width=True):
+    if uploaded_file and col1.button("Blok Zincirine Kaydet", use_container_width=True):
         file_hash = hash_file(uploaded_file)
-        with st.spinner("Dosya Pinata'ya yükleniyor..."):
+        with st.spinner("Dosya Pinata IPFS ağına yükleniyor..."):
             file_cid = upload_file_to_ipfs(uploaded_file, uploaded_file.name)
         
         if file_cid:
             new_block = blockchain.new_block({
                 "file_name": uploaded_file.name,
                 "file_hash": file_hash,
-                "note": user_note,
+                "note": user_note if user_note else "Açıklama yok",
                 "file_cid": file_cid 
             })
-            st.toast("Blok eklendi!")
+            st.toast("Dosya başarıyla blok zincirine eklendi!", icon="✅")
             st.rerun()
 
     with col2:
-        st.metric("Toplam Blok", len(blockchain.chain))
+        st.metric("Toplam Paylaşım", len(blockchain.chain)-1 if len(blockchain.chain)>0 else 0)
         if os.path.exists(CID_FILE):
-            with open(CID_FILE, 'r') as f:
-                st.caption(f"Zincir CID: {f.read().strip()[:10]}...")
+            st.success("IPFS Bağlantısı Aktif")
 
 st.divider()
-st.subheader(f"Zincir Geçmişi")
+st.subheader("Dosya Geçmişi")
 
+# Dosya Geçmişi Listeleme
 for block in reversed(blockchain.chain):
     is_data = isinstance(block.data, dict) and block.index > 0
-    title = f"Blok #{block.index}"
-    if is_data: title += f" - {block.data.get('file_name')}"
     
-    with st.expander(title, expanded=(block.index == len(blockchain.chain)-1)):
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            st.write(f"**Hash:** `{block.hash[:20]}...`")
-            st.write(f"**Önceki:** `{block.previous_hash[:20]}...`")
-            if is_data:
-                st.json(block.data)
+    if is_data:
+        fname = block.data.get('file_name', 'Bilinmeyen Dosya')
+        note = block.data.get('note', 'Yok')
+        cid = block.data.get('file_cid', 'Yok')
+        fhash = block.data.get('file_hash', 'Yok')
+        date_str = datetime.fromtimestamp(block.timestamp).strftime('%d-%m-%Y %H:%M:%S')
         
-        with c2:
-            if is_data:
-                cid = block.data.get('file_cid')
-                fname = block.data.get('file_name', 'dosya')
-                st.info(f"📂 Dosya CID: `{cid}`")
+        # Kart Görünümü (Expander)
+        with st.expander(f"📄 {fname} (Eklenme: {date_str})", expanded=(block.index == len(blockchain.chain)-1)):
+            
+            c1, c2 = st.columns([2, 1])
+            
+            with c1:
+                st.markdown(f"**📂 Dosya Adı:** {fname}")
+                st.markdown(f"**📝 Açıklama:** {note}")
+                st.markdown(f"**📅 Yüklenme Tarihi:** {date_str}")
+                st.markdown(f"**🔗 CİD:** `{cid}`")
                 
-                # --- YENİ İNDİRME MODELİ (DÜZELTİLMİŞ) ---
-                # Dosya içeriğini session_state'de saklayarak butonun kaybolmasını önlüyoruz.
-                
+                # Teknik Detaylar (Gizlenebilir Alan)
+                with st.expander("🛠️ Teknik Blok Detayları (Hash & Nonce)"):
+                    st.code(f"HASH: {fhash}", language="text")
+                    st.text(f"Blok Index: {block.index}")
+                    st.text(f"Nonce: {block.nonce}")
+                    st.text(f"Blok Hash: {block.hash}")
+                    st.text(f"Önceki Hash: {block.previous_hash}")
+
+            with c2:
+                st.write("#### İndirme İşlemi")
+                # --- YENİ İNDİRME MODELİ ---
                 download_key = f"file_content_{block.index}"
                 
-                # 1. Aşama: Dosyayı IPFS'ten Çek
-                if st.button(f"⬇️ İndirmeyi Başlat ({fname})", key=f"btn_{block.index}"):
+                if st.button(f"⬇️ İndirmeyi Başlat", key=f"btn_{block.index}", use_container_width=True):
                     file_content = fetch_file_with_redundancy(cid)
-                    if file_content:
-                        # Veriyi oturuma kaydet
+                    if file_content is not None:
                         st.session_state[download_key] = file_content
+                        st.rerun()
                     else:
-                        # Hata durumunda eski veriyi temizle
                         if download_key in st.session_state:
                             del st.session_state[download_key]
 
-                # 2. Aşama: İndirme Butonunu Göster (Eğer veri hafızadaysa)
                 if download_key in st.session_state:
                     st.success("✅ Dosya hazır!")
                     st.download_button(
-                        label=f"💾 Dosyayı Kaydet: {fname}",
+                        label=f"💾 Kaydet: {fname}",
                         data=st.session_state[download_key],
                         file_name=fname,
                         mime="application/octet-stream",
-                        key=f"dl_{block.index}"
+                        key=f"dl_{block.index}",
+                        use_container_width=True
                     )
-                    
-            elif block.index == 0:
-                st.write("Genesis Blok")
+    
+    elif block.index == 0:
+        with st.container():
+            st.caption(f"🏁 Başlangıç Bloğu (Genesis) - {datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S')}")
