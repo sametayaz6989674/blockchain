@@ -73,6 +73,8 @@ def upload_file_to_ipfs(uploaded_file, file_name):
     
     try:
         # Dosya yükleme isteği
+        # NOT: Pinata'da dosyayı dizine sarmak için 'pinataOptions: {"wrapWithDirectory": true}' 
+        # parametresi gerekir, ancak biz URL'yi basitleştirerek bu sorunu çözüyoruz.
         response = requests.post(url, headers=headers, files=files, timeout=60)
         response.raise_for_status() # Hata durumunda istisna fırlatır
         
@@ -374,7 +376,7 @@ for block in reversed(blockchain.chain):
         # block.data'dan bilgileri güvenli bir şekilde çekme
         if isinstance(block.data, dict):
             file_cid = block.data.get('file_cid')
-            # Dosya adı indirme linki için gereklidir
+            # Dosya adı artık sadece görsel amaçlı kullanılıyor
             file_name = block.data.get('file_name', f'indirilen_dosya_{block.index}')
         else:
             file_cid = None
@@ -408,15 +410,17 @@ for block in reversed(blockchain.chain):
                 st.markdown("---")
                 st.markdown(f"**Dosya IPFS CID (Ağ Adresi):** `{file_cid}`")
                 
-                # --- ÇÖZÜM: Pinata Ağ Geçidi ve dosya adı eklenerek direkt indirme linki oluşturma ---
-                # Pinata Ağ Geçidi + CID + Dosya Adı, indirmeyi en güvenilir şekilde başlatır.
-                download_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}/{file_name}"
+                # --- ÇÖZÜM UYGULANDI: URL'den dosya adını kaldırdık! ---
+                # Hata: "...no link named 'test.txt'..." idi.
+                # Çözüm: Dosya adı dizin olarak algılandığı için URL'den çıkarıldı.
+                # Artık sadece https://gateway.pinata.cloud/ipfs/[CID] kullanılacak.
+                download_url = f"{PINATA_GATEWAY_DOWNLOAD}{file_cid}"
                 
                 st.link_button(
                     f"💾 Orijinal Dosyayı İndir ({file_name})", 
                     download_url,
                     use_container_width=True,
-                    help=f"Bu düğme, Pinata'nın kendi Ağ Geçidi üzerinden orijinal dosyayı indirir. Adres: {PINATA_GATEWAY_DOWNLOAD}"
+                    help="Bu düğme, Pinata'nın kendi Ağ Geçidi üzerinden orijinal dosyayı indirir."
                 )
             elif block.index > 0:
                 st.warning("Bu blokta dosya CID bilgisi bulunamadı veya Genesis Blok değil.")
