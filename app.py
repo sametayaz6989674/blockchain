@@ -10,8 +10,12 @@ from datetime import datetime
 # --- GENEL SABİTLER ---
 # Streamlit Cloud'da geçici olarak zincirin son CID'sini tutacak dosya adı.
 CID_FILE = "last_chain_cid.txt" 
-# Pinata Ağ Geçidi URL'si (İndirme için kullanılır)
-PINATA_GATEWAY = "https://gateway.pinata.cloud/ipfs/"
+# Pinata sadece yükleme ve zincir okuma için kullanılır.
+PINATA_GATEWAY_UPLOAD = "https://api.pinata.cloud/"
+# Zincir okuma için kullanılacak Pinata Ağ Geçidi
+PINATA_GATEWAY_DOWNLOAD = PINATA_GATEWAY_UPLOAD.replace("api.", "gateway.") + "ipfs/" 
+# Cloudflare Ağ Geçidi (Alternatif indirme denemesi için tutuldu, ancak artık kullanılmıyor)
+# CLOUDFLARE_GATEWAY = "https://cloudflare-ipfs.com/ipfs/" 
 
 # --- SINIF TANIMLARI ---
 
@@ -56,7 +60,7 @@ def upload_file_to_ipfs(uploaded_file, file_name):
     if not PINATA_JWT:
         return None
         
-    url = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+    url = PINATA_GATEWAY_UPLOAD + "pinning/pinFileToIPFS"
     headers = {
         "Authorization": f"Bearer {PINATA_JWT}"
     }
@@ -97,7 +101,7 @@ def save_chain_to_ipfs(chain):
     serializable_chain = [block.__dict__ for block in chain]
     chain_json = json.dumps(serializable_chain, indent=4)
     
-    url = "https://api.pinata.cloud/pinning/pinFileToIPFS"
+    url = PINATA_GATEWAY_UPLOAD + "pinning/pinFileToIPFS"
     headers = {
         "Authorization": f"Bearer {PINATA_JWT}"
     }
@@ -143,7 +147,8 @@ def load_chain_from_ipfs():
         if not last_cid:
             return None
 
-        gateway_url = f"{PINATA_GATEWAY}{last_cid}"
+        # Zincir okuma için Pinata Gateway
+        gateway_url = f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}"
         response = requests.get(gateway_url, timeout=10) 
         response.raise_for_status()
         
@@ -167,7 +172,30 @@ def load_chain_from_ipfs():
         st.warning(f"⚠️ Yükleme hatası. Yeni zincir başlatılıyor. Hata: {e}")
         return None
 
+# --- YENİ FONKSİYON: IPFS'TEN DOSYAYI ÇEKME ---
+
+def fetch_file_from_ipfs(file_cid):
+    """Verilen CID'ye ait dosya içeriğini IPFS'ten çeker."""
+    try:
+        # Cloudflare'ı doğrudan kullanmak indirme için daha stabil olabilir
+        CLOUDFLARE_GATEWAY = "https://cloudflare-ipfs.com/ipfs/"
+        gateway_url = f"{CLOUDFLARE_GATEWAY}{file_cid}"
+        
+        response = requests.get(gateway_url, stream=True, timeout=30)
+        response.raise_for_status()
+        
+        # Dosya içeriğini byte olarak döndür
+        return response.content
+
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ IPFS Dosya Çekme Hatası: {e}. CID'nin geçerli ve erişilebilir olduğundan emin olun.")
+        return None
+    except Exception as e:
+        st.error(f"❌ Beklenmedik Dosya Çekme Hatası: {e}")
+        return None
+
 # --- BLOCKCHAIN SINIFI ---
+# (Burada değişiklik yapılmadı, önceki kodla aynı)
 
 class Blockchain:
     """Tüm blok zincirini yönetir."""
@@ -316,7 +344,7 @@ with st.container(border=True):
                 with open(CID_FILE, 'r') as f:
                     last_cid = f.read().strip()
                     st.info(f"Son Zincir CID'si: `{last_cid[:10]}...`")
-                    st.link_button("IPFS Zincirini Görüntüle", f"{PINATA_GATEWAY}{last_cid}", help="Bu CID, zincirin son durumunu gösterir.")
+                    st.link_button("IPFS Zincirini Pinata'da Görüntüle", f"{PINATA_GATEWAY_DOWNLOAD}{last_cid}", help="Bu CID, zincirin son durumunu gösterir.")
             except:
                 st.error("CID dosyası okunamıyor.")
         else:
@@ -352,8 +380,10 @@ for block in reversed(blockchain.chain):
         # block.data'nın sözlük olup olmadığını kontrol et
         if isinstance(block.data, dict):
             file_cid = block.data.get('file_cid')
+            file_name = block.data.get('file_name', 'indirilen_dosya')
         else:
             file_cid = None
+            file_name = 'indirilen_dosya'
             
         with col1:
             st.subheader("Blok Bilgileri")
@@ -382,14 +412,25 @@ for block in reversed(blockchain.chain):
                 st.markdown("---")
                 st.markdown(f"**Dosya IPFS CID (Ağ Adresi):** `{file_cid}`")
                 
-                # --- İNDİRME BUTONU ---
-                # DEĞİŞİKLİK: Pinata'yı indirmeye zorlamak için "?content-disposition=attachment" eklendi.
-                download_url = f"{PINATA_GATEWAY}{file_cid}?content-disposition=attachment"
-                st.link_button(
-                    f"💾 Orijinal Dosyayı İndir ({block.data.get('file_name', 'IPFS')})", 
-                    download_url,
-                    help="Bu düğme, Pinata Ağ Geçidi üzerinden blok zincirine kaydedilen orijinal dosyayı indirir."
-                )
+                # --- YENİ İNDİRME BUTONU (st.download_button) ---
+                
+                # SADECE st.download_button'a basıldığında dosya içeriğini çekmek için basit bir kontrol kullanıyoruz.
+                # Bu kısım her zaman Streamlit'in yenilenmesi sırasında çalışır,
+                # bu yüzden butona basılıp basılmadığını kontrol etmek zor. 
+                # En basit çözüm: Veriyi her zaman çekmeye hazırla.
+                
+                file_content = fetch_file_from_ipfs(file_cid)
+                
+                if file_content:
+                    st.download_button(
+                        label=f"💾 Orijinal Dosyayı İndir ({file_name})",
+                        data=file_content,
+                        file_name=file_name, 
+                        mime='application/octet-stream', # Genel MIME türü indirmeyi zorlar
+                        help="Bu düğme, dosyayı IPFS'ten çekip tarayıcınıza doğrudan indirir."
+                    )
+                else:
+                    st.warning("Dosya içeriği IPFS'ten çekilemediği için indirme butonu devre dışı.")
             elif block.index == 0:
                 st.markdown("Bu, zincirin başlangıç bloğudur (Genesis). Dosya içeriği yoktur.")
             else:
