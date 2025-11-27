@@ -20,34 +20,8 @@ IPFS_GATEWAYS = [
     "https://dweb.link/ipfs/"
 ]
 
-# --- SAYFA AYARLARI VE CSS TASARIMI ---
+# --- SAYFA AYARLARI ---
 st.set_page_config(page_title="Blockchain Dosya Paylaşımı", layout="wide", page_icon="📂")
-
-# Arka planı beyaz, yazıları koyu yapmak için CSS enjeksiyonu
-st.markdown("""
-<style>
-    /* Ana arka plan */
-    .stApp {
-        background-color: #ffffff;
-        color: #1f1f1f;
-    }
-    /* Input alanları ve kutular */
-    .stTextInput > div > div > input, .stFileUploader {
-        background-color: #f0f2f6;
-        color: black;
-    }
-    /* Expander başlıkları */
-    .streamlit-expanderHeader {
-        background-color: #f8f9fa;
-        color: #31333F;
-        border-radius: 5px;
-    }
-    /* Butonlar */
-    .stButton > button {
-        border-radius: 8px;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # --- SINIF TANIMLARI ---
 
@@ -278,8 +252,6 @@ with st.container(border=True):
 
     with col2:
         st.metric("Toplam Paylaşım", len(blockchain.chain)-1 if len(blockchain.chain)>0 else 0)
-        if os.path.exists(CID_FILE):
-            st.success("IPFS Bağlantısı Aktif")
 
 st.divider()
 st.subheader("Dosya Geçmişi")
@@ -342,3 +314,8 @@ for block in reversed(blockchain.chain):
     elif block.index == 0:
         with st.container():
             st.caption(f"🏁 Başlangıç Bloğu (Genesis) - {datetime.fromtimestamp(block.timestamp).strftime('%Y-%m-%d %H:%M:%S')}")
+
+# Kenar Çubuğu (Sidebar) - Durum Bilgisi
+if os.path.exists(CID_FILE):
+    st.sidebar.markdown("---")
+    st.sidebar.caption("✅ IPFS Bağlantısı Aktif")
